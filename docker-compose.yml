@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: tracefolio-postgres
+    environment:
+      POSTGRES_DB: tracefolio
+      POSTGRES_USER: tracefolio
+      POSTGRES_PASSWORD: tracefolio_password
+    ports:
+      - "15432:5432"
+    volumes:
+      - tracefolio_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracefolio -d tracefolio"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  tracefolio_pgdata:

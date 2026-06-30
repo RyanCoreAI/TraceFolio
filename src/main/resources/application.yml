@@ -1,0 +1,48 @@
+server:
+  port: 8081
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force-response: true
+
+spring:
+  application:
+    name: tracefolio
+  datasource:
+    url: jdbc:postgresql://localhost:15432/tracefolio
+    username: tracefolio
+    password: tracefolio_password
+  flyway:
+    enabled: true
+  ai:
+    model:
+      chat: none
+      embedding: none
+    openai:
+      api-key: ${DEEPSEEK_API_KEY:}
+      base-url: https://api.deepseek.com
+    ollama:
+      base-url: http://localhost:11434
+
+tracefolio:
+  tenant-id: ryan
+  embedding:
+    model: bge-m3
+    dimensions: 1024
+    base-url: http://localhost:11434
+  deepseek:
+    api-key: ${DEEPSEEK_API_KEY:}
+    base-url: https://api.deepseek.com
+    model: deepseek-v4-flash
+    temperature: 0.1
+  github:
+    token: ${GITHUB_TOKEN:}
+  retrieval:
+    vector-top-k: 12
+    fts-top-k: 12
+    final-top-k: 8
+    rrf-k: 60
+    min-selected-chunks: 2
+  generation:
+    max-evidence-chars: 12000
