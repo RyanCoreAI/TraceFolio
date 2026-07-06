@@ -22,27 +22,31 @@ public class RetrievalService {
     private final ObjectMapper objectMapper;
     private final OllamaEmbeddingClient embeddingClient;
     private final RrfRanker rrfRanker;
+    private final QueryNormalizer queryNormalizer;
 
     public RetrievalService(
             TraceFolioProperties properties,
             JdbcTemplate jdbcTemplate,
             ObjectMapper objectMapper,
             OllamaEmbeddingClient embeddingClient,
-            RrfRanker rrfRanker
+            RrfRanker rrfRanker,
+            QueryNormalizer queryNormalizer
     ) {
         this.properties = properties;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.embeddingClient = embeddingClient;
         this.rrfRanker = rrfRanker;
+        this.queryNormalizer = queryNormalizer;
     }
 
     public RetrievalResult retrieve(String question) {
-        float[] queryEmbedding = embeddingClient.embed(question);
+        QueryNormalizer.NormalizedQuery normalized = queryNormalizer.normalize(question);
+        float[] queryEmbedding = embeddingClient.embed(normalized.expanded());
         String vector = toPgVectorLiteral(queryEmbedding);
 
         List<RetrievalCandidate> vectorHits = vectorSearch(vector);
-        List<RetrievalCandidate> ftsHits = ftsSearch(question);
+        List<RetrievalCandidate> ftsHits = ftsSearch(normalized.expanded());
         List<RetrievedChunk> chunks = rrfRanker.rank(
                 vectorHits,
                 ftsHits,
@@ -53,7 +57,9 @@ public class RetrievalService {
                 vectorHits.size(),
                 ftsHits.size(),
                 chunks.size(),
-                chunks.stream().mapToDouble(RetrievedChunk::rrfScore).max().orElse(0.0)
+                chunks.stream().mapToDouble(RetrievedChunk::rrfScore).max().orElse(0.0),
+                normalized.expanded(),
+                normalized.expansions()
         );
 
         return new RetrievalResult(chunks, summary);
@@ -81,7 +87,9 @@ public class RetrievalService {
         return jdbcTemplate.query("""
                 SELECT id, document_id, source_type, source_uri, title,
                        heading_path, content, metadata,
-                       ts_rank_cd(fts, websearch_to_tsquery('simple', ?)) AS score
+                       ts_rank_cd(fts, websearch_to_tsquery('simple', ?))
+                           + CASE WHEN lower(coalesce(title, '')) LIKE lower(?) THEN 0.2 ELSE 0 END
+                           + CASE WHEN lower(coalesce(heading_path, '')) LIKE lower(?) THEN 0.1 ELSE 0 END AS score
                 FROM rag_chunk
                 WHERE tenant_id = ?
                   AND fts @@ websearch_to_tsquery('simple', ?)
@@ -90,6 +98,8 @@ public class RetrievalService {
                 """,
                 (rs, rowNum) -> mapCandidate(rs, rowNum + 1, "FTS"),
                 question,
+                "%" + question + "%",
+                "%" + question + "%",
                 properties.tenantId(),
                 question,
                 properties.retrieval().ftsTopK()

@@ -1,6 +1,7 @@
 package com.yanxai.tracefolio.eval;
 
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -15,7 +16,7 @@ public class EvalController {
     }
 
     @PostMapping("/run")
-    public EvalRunResult run() {
-        return evalRunner.run();
+    public EvalRunResult run(@RequestBody(required = false) EvalRunRequest request) {
+        return evalRunner.run(request);
     }
 }

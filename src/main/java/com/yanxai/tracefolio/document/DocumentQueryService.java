@@ -48,7 +48,11 @@ public class DocumentQueryService {
                 count("SELECT COUNT(*) FROM rag_document WHERE tenant_id = ?", properties.tenantId()),
                 count("SELECT COUNT(*) FROM rag_chunk WHERE tenant_id = ?", properties.tenantId()),
                 count("SELECT COUNT(*) FROM rag_query_trace WHERE tenant_id = ?", properties.tenantId()),
-                count("SELECT COUNT(*) FROM rag_eval_run WHERE tenant_id = ?", properties.tenantId())
+                count("SELECT COUNT(*) FROM rag_eval_run WHERE tenant_id = ?", properties.tenantId()),
+                count("SELECT COUNT(*) FROM rag_evidence_claim WHERE tenant_id = ?", properties.tenantId()),
+                count("SELECT COUNT(*) FROM rag_repo_scan WHERE tenant_id = ?", properties.tenantId()),
+                count("SELECT COUNT(*) FROM rag_workflow_run WHERE tenant_id = ?", properties.tenantId()),
+                count("SELECT COUNT(*) FROM rag_portfolio_export WHERE tenant_id = ?", properties.tenantId())
         );
     }
 

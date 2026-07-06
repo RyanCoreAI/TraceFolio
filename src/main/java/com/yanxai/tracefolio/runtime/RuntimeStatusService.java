@@ -152,7 +152,7 @@ public class RuntimeStatusService {
         try {
             return documentQueryService.stats();
         } catch (Exception e) {
-            return new KnowledgeStats(0, 0, 0, 0);
+            return new KnowledgeStats(0, 0, 0, 0, 0, 0, 0, 0);
         }
     }
 
