@@ -17,6 +17,9 @@ import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class EvidenceClaimRepository {
@@ -57,9 +60,38 @@ public class EvidenceClaimRepository {
         jdbcTemplate.update("DELETE FROM rag_evidence_claim WHERE tenant_id = ?", properties.tenantId());
     }
 
+    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
     public boolean insert(EvidenceClaimDraft claim) {
         EvidenceClaimValidation validation = validator.validate(claim);
         Map<String, Object> metadata = mergedMetadata(claim.metadata(), validation);
+        String sourceRefType = safeSourceRefType(claim);
+        String quoteHash = sha256(claim.quote());
+        // The legacy unique constraint treats nullable source IDs/technology as distinct.
+        // Serialize writes for the actual source, then compare NULLs as equal. This also
+        // recognizes existing duplicates without deleting historical evidence.
+        if ("CHUNK".equals(sourceRefType) && claim.sourceChunkId() != null) {
+            jdbcTemplate.queryForObject("SELECT id FROM rag_chunk WHERE id = ? AND tenant_id = ? FOR UPDATE",
+                    UUID.class, claim.sourceChunkId(), properties.tenantId());
+        } else if ("REPO_SCAN".equals(sourceRefType) && claim.repoScanId() != null) {
+            jdbcTemplate.queryForObject("SELECT id FROM rag_repo_scan WHERE id = ? AND tenant_id = ? FOR UPDATE",
+                    UUID.class, claim.repoScanId(), properties.tenantId());
+        } else {
+            throw new IllegalArgumentException("Evidence claim requires a valid source reference");
+        }
+        Boolean exists = jdbcTemplate.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM rag_evidence_claim
+                    WHERE tenant_id = ? AND source_ref_type = ?
+                      AND source_chunk_id IS NOT DISTINCT FROM ?::uuid
+                      AND repo_scan_id IS NOT DISTINCT FROM ?::uuid
+                      AND capability = ? AND technology IS NOT DISTINCT FROM ?::text
+                      AND quote_hash = ?
+                )
+                """, Boolean.class, properties.tenantId(), sourceRefType, claim.sourceChunkId(),
+                claim.repoScanId(), claim.capability(), claim.technology(), quoteHash);
+        if (Boolean.TRUE.equals(exists)) {
+            return false;
+        }
         int updated = jdbcTemplate.update("""
                 INSERT INTO rag_evidence_claim (
                     id, tenant_id, source_ref_type, source_chunk_id, repo_scan_id, file_path,
@@ -75,7 +107,7 @@ public class EvidenceClaimRepository {
                 """,
                 UUID.randomUUID(),
                 properties.tenantId(),
-                safeSourceRefType(claim),
+                sourceRefType,
                 claim.sourceChunkId(),
                 claim.repoScanId(),
                 claim.filePath(),
@@ -91,7 +123,7 @@ public class EvidenceClaimRepository {
                 claim.sourceUri(),
                 claim.headingPath(),
                 claim.quote(),
-                sha256(claim.quote()),
+                quoteHash,
                 claim.strength(),
                 claim.riskLevel(),
                 claim.confidence(),

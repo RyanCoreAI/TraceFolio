@@ -16,6 +16,8 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.util.UriComponentsBuilder;
 import org.springframework.web.server.ResponseStatusException;
 
 @Service
@@ -25,14 +27,24 @@ public class GitHubRepoScanner {
     private final RepoScanRepository repository;
     private final RepoEvidenceClaimWriter claimWriter;
 
+    @Autowired
     public GitHubRepoScanner(
             TraceFolioProperties properties,
             RepoScanRepository repository,
             RepoEvidenceClaimWriter claimWriter
     ) {
+        this(properties, repository, claimWriter, RestClient.builder());
+    }
+
+    GitHubRepoScanner(
+            TraceFolioProperties properties,
+            RepoScanRepository repository,
+            RepoEvidenceClaimWriter claimWriter,
+            RestClient.Builder builder
+    ) {
         this.repository = repository;
         this.claimWriter = claimWriter;
-        RestClient.Builder builder = RestClient.builder()
+        builder
                 .baseUrl("https://api.github.com")
                 .defaultHeader(HttpHeaders.ACCEPT, "application/vnd.github+json")
                 .defaultHeader("X-GitHub-Api-Version", "2022-11-28")
@@ -52,7 +64,15 @@ public class GitHubRepoScanner {
                 .retrieve()
                 .body(GitHubRepoMetadata.class);
         String branch = firstNonBlank(request.branch(), metadata == null ? null : metadata.default_branch(), "main");
-        String treeRef = firstNonBlank(request.safeCommitSha(), branch, "main");
+        String requestedRef = firstNonBlank(request.safeCommitSha(), branch, "main");
+        GitHubCommitResponse commit = restClient.get()
+                .uri("/repos/{owner}/{repo}/commits/{ref}", request.owner(), request.repo(), requestedRef)
+                .retrieve()
+                .body(GitHubCommitResponse.class);
+        if (commit == null || commit.sha() == null || !commit.sha().matches("[0-9a-fA-F]{40}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "GitHub 未返回可固定的完整 commit SHA，未保存扫描证据。");
+        }
+        String commitSha = commit.sha().toLowerCase(Locale.ROOT);
         String sourceUri = metadata == null || metadata.html_url() == null
                 ? "https://github.com/%s/%s".formatted(request.owner(), request.repo())
                 : metadata.html_url();
@@ -60,7 +80,7 @@ public class GitHubRepoScanner {
         GitHubTreeResponse tree = restClient.get()
                 .uri(builder -> builder.path("/repos/{owner}/{repo}/git/trees/{branch}")
                         .queryParam("recursive", "1")
-                        .build(request.owner(), request.repo(), treeRef))
+                        .build(request.owner(), request.repo(), commitSha))
                 .retrieve()
                 .body(GitHubTreeResponse.class);
 
@@ -79,7 +99,7 @@ public class GitHubRepoScanner {
             evidence.addAll(analyzeFile(
                     request.owner(),
                     request.repo(),
-                    branch,
+                    commitSha,
                     item.path(),
                     content,
                     "GITHUB"
@@ -97,14 +117,14 @@ public class GitHubRepoScanner {
                 branch,
                 sourceUri,
                 request.safeScanMode(),
-                request.safeCommitSha(),
+                commitSha,
                 selected.size(),
                 0,
                 summary,
                 evidence.stream().limit(80).toList(),
                 warnings,
                 selected.stream().map(GitHubTreeItem::path).toList(),
-                snapshot(tree, selected, request)
+                snapshot(tree, selected, request, commitSha)
         );
         UUID scanId = repository.save(response);
         int insertedClaims = claimWriter.insertClaims(scanId, request.owner(), request.repo(), branch, "GITHUB_REPO_FILE", response.evidence());
@@ -286,10 +306,10 @@ public class GitHubRepoScanner {
         ));
     }
 
-    private Map<String, Object> snapshot(GitHubTreeResponse tree, List<GitHubTreeItem> selected, RepoScanRequest request) {
+    private Map<String, Object> snapshot(GitHubTreeResponse tree, List<GitHubTreeItem> selected, RepoScanRequest request, String commitSha) {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("scanMode", request.safeScanMode());
-        snapshot.put("commitSha", request.safeCommitSha());
+        snapshot.put("commitSha", commitSha);
         snapshot.put("includePaths", request.includePathsOrEmpty());
         snapshot.put("excludePaths", request.excludePathsOrEmpty());
         snapshot.put("maxFiles", request.safeMaxFiles());
@@ -376,7 +396,10 @@ public class GitHubRepoScanner {
             String base = "local://%s/%s/%s".formatted(owner, repo, path);
             return lineNumber == null ? base : base + "#L" + lineNumber;
         }
-        String base = "https://github.com/%s/%s/blob/%s/%s".formatted(owner, repo, branch, path);
+        String base = UriComponentsBuilder.fromUriString("https://github.com")
+                .pathSegment(owner, repo, "blob", branch)
+                .pathSegment(path.split("/"))
+                .build().encode().toUriString();
         return lineNumber == null ? base : base + "#L" + lineNumber;
     }
 
@@ -433,6 +456,9 @@ public class GitHubRepoScanner {
     }
 
     private record GitHubRepoMetadata(String default_branch, String html_url) {
+    }
+
+    private record GitHubCommitResponse(String sha) {
     }
 
     private record GitHubTreeResponse(List<GitHubTreeItem> tree, boolean truncated) {

@@ -3,11 +3,15 @@ package com.yanxai.tracefolio.document;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Map;
+import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Propagation;
 
 @Repository
 public class KnowledgeRepository {
@@ -18,6 +22,47 @@ public class KnowledgeRepository {
     public KnowledgeRepository(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper) {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW, isolation = Isolation.READ_COMMITTED)
+    public UUID storeDocument(
+            String tenantId,
+            String sourceType,
+            String title,
+            String sourceUri,
+            String contentHash,
+            Map<String, Object> metadata,
+            List<ChunkDraft> chunks,
+            List<String> chunkHashes,
+            List<float[]> embeddings
+    ) {
+        if (chunks.size() != chunkHashes.size() || chunks.size() != embeddings.size()) {
+            throw new IllegalArgumentException("Every chunk requires a hash and embedding");
+        }
+        UUID documentId = upsertDocument(tenantId, sourceType, title, sourceUri, contentHash, metadata);
+        jdbcTemplate.queryForObject("SELECT id FROM rag_document WHERE id = ? FOR UPDATE", UUID.class, documentId);
+        List<StoredChunk> stored = jdbcTemplate.query(
+                "SELECT chunk_index, content_hash FROM rag_chunk WHERE document_id = ? ORDER BY chunk_index",
+                (rs, rowNum) -> new StoredChunk(rs.getInt("chunk_index"), rs.getString("content_hash")),
+                documentId
+        );
+        boolean complete = stored.size() == chunks.size();
+        for (int i = 0; complete && i < chunks.size(); i++) {
+            complete = stored.get(i).index() == chunks.get(i).chunkIndex()
+                    && stored.get(i).hash().equals(chunkHashes.get(i));
+        }
+        // Re-importing identical content must preserve chunk IDs and dependent evidence claims.
+        if (!complete) {
+            deleteChunks(documentId);
+            for (int i = 0; i < chunks.size(); i++) {
+                insertChunk(documentId, tenantId, sourceType, sourceUri,
+                        chunks.get(i), chunkHashes.get(i), embeddings.get(i));
+            }
+        }
+        return documentId;
+    }
+
+    private record StoredChunk(int index, String hash) {
     }
 
     public UUID upsertDocument(

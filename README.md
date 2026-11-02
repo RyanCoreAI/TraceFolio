@@ -2,6 +2,14 @@
 
 TraceFolio is a traceable technical portfolio evidence RAG service. It ingests public technical assets such as blog posts, GitHub READMEs, docs, and changelogs, then answers questions only when it can cite retrieved evidence.
 
+## Local Trust Boundary
+
+This branch is a single-user local prototype. **Do not expose it to the public Internet, a shared LAN, a tunnel, or an unauthenticated reverse proxy.** The backend, Vite dev/preview servers, and Docker PostgreSQL port bind to `127.0.0.1` by default. Keep these bindings when running locally.
+
+The API has no authentication or user authorization. Blog ingest accepts caller-supplied URLs and follows redirects without a private-network/loopback destination policy. Local repository scanning can read directories accessible to the server process; `confirmOwnership=true` records caller confirmation and does not restrict filesystem access. Loopback binding reduces direct network exposure but does not resolve SSRF, malicious-page requests, or filesystem authorization. Import only trusted URLs and scan only directories you intend this process to read; use a restricted OS account without unrelated credentials or private mounts.
+
+Public or multi-user deployment requires authenticated authorization, an explicit repository-root allowlist with real-path/symlink containment, destination/IP and redirect validation with network egress restrictions, and request-forgery protections. These controls are not implemented by the reliability fixes in this branch. See [reliability and verification notes](docs/reliability-fixes.md).
+
 ## Stack
 
 - Java 21

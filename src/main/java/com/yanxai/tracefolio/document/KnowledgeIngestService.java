@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -39,42 +40,42 @@ public class KnowledgeIngestService {
         String cleaned = markdownCleaner.clean(raw.content());
         String documentHash = sha256(cleaned);
 
-        UUID documentId = repository.upsertDocument(
+        List<ChunkDraft> chunks = chunker.chunk(raw.title(), cleaned);
+        List<float[]> embeddings = new ArrayList<>(chunks.size());
+        for (ChunkDraft chunk : chunks) {
+            float[] embedding = embeddingClient.embed(chunk.content());
+            validateDimensions(embedding);
+            embeddings.add(embedding);
+        }
+
+        // Model/network calls must finish before the short database transaction starts.
+        UUID documentId = repository.storeDocument(
                 properties.tenantId(),
                 raw.sourceType(),
                 raw.title(),
                 raw.sourceUri(),
                 documentHash,
-                raw.metadata()
+                raw.metadata(),
+                chunks,
+                chunks.stream().map(chunk -> sha256(chunk.content())).toList(),
+                embeddings
         );
-
-        List<ChunkDraft> chunks = chunker.chunk(raw.title(), cleaned);
-        repository.deleteChunks(documentId);
-
-        for (ChunkDraft chunk : chunks) {
-            float[] embedding = embeddingClient.embed(chunk.content());
-            validateDimensions(embedding);
-
-            repository.insertChunk(
-                    documentId,
-                    properties.tenantId(),
-                    raw.sourceType(),
-                    raw.sourceUri(),
-                    chunk,
-                    sha256(chunk.content()),
-                    embedding
-            );
-        }
 
         return new IngestResponse(documentId, chunks.size(), raw.sourceType(), raw.sourceUri());
     }
 
     private void validateDimensions(float[] embedding) {
         int expected = properties.embedding().dimensions();
-        if (embedding.length != expected) {
+        if (embedding == null || embedding.length != expected) {
             throw new IllegalStateException(
-                    "Embedding dimensions mismatch. expected=" + expected + ", actual=" + embedding.length
+                    "Embedding dimensions mismatch. expected=" + expected + ", actual="
+                            + (embedding == null ? "null" : embedding.length)
             );
+        }
+        for (float value : embedding) {
+            if (!Float.isFinite(value)) {
+                throw new IllegalStateException("Embedding contains non-finite values");
+            }
         }
     }
 
