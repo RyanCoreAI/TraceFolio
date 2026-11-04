@@ -8,8 +8,10 @@ import org.springframework.stereotype.Service;
 @Service
 public class PortfolioPrivacyScanner {
 
-    private static final Pattern WINDOWS_ABSOLUTE_PATH = Pattern.compile("[A-Za-z]:\\\\[^\\s)`]+");
-    private static final Pattern SECRET_ASSIGNMENT = Pattern.compile("(?i)(api[_-]?key|token|password|secret)\\s*[:=]\\s*['\\\"]?[^\\s'\\\"]+");
+    private static final Pattern WINDOWS_ABSOLUTE_PATH = Pattern.compile("[A-Za-z]:[\\\\/][^\\s)`\"']+");
+    private static final Pattern SECRET_ASSIGNMENT = Pattern.compile(
+            "(?i)(\\b(?:[a-z0-9]+_)*(?:api[_-]?key|token|password|passwd|secret|client[_-]?secret|private[_-]?key)\\b[\"']?\\s*[:=]\\s*)"
+                    + "(?:\"(?:\\\\.|[^\"\\\\\\r\\n])*\"|'(?:\\\\.|[^'\\\\\\r\\n])*'|[^\\s'\"`,}]+)");
 
     public PrivacyScanResult scan(String content) {
         String text = content == null ? "" : content;
@@ -29,7 +31,7 @@ public class PortfolioPrivacyScanner {
     public String redact(String content) {
         String text = content == null ? "" : content;
         text = WINDOWS_ABSOLUTE_PATH.matcher(text).replaceAll("[REDACTED_LOCAL_PATH]");
-        text = SECRET_ASSIGNMENT.matcher(text).replaceAll("$1=[REDACTED]");
+        text = SECRET_ASSIGNMENT.matcher(text).replaceAll("$1[REDACTED]");
         text = text.replaceAll("DEEPSEEK_API_KEY=[^\\s`]+", "DEEPSEEK_API_KEY=[REDACTED]");
         text = text.replaceAll("GITHUB_TOKEN=[^\\s`]+", "GITHUB_TOKEN=[REDACTED]");
         return text;

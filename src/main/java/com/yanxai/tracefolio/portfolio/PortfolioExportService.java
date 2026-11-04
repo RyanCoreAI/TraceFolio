@@ -31,7 +31,7 @@ public class PortfolioExportService {
     private final PortfolioExportRepository exportRepository;
     private final PortfolioPrivacyScanner privacyScanner;
     private final Parser markdownParser = Parser.builder().build();
-    private final HtmlRenderer htmlRenderer = HtmlRenderer.builder().build();
+    private final HtmlRenderer htmlRenderer = HtmlRenderer.builder().escapeHtml(true).sanitizeUrls(true).build();
 
     @Autowired
     public PortfolioExportService(
@@ -68,12 +68,13 @@ public class PortfolioExportService {
         String markdown = toMarkdown(safeRequest.safeTitle(), claims, jdRun);
         PrivacyScanResult privacy = privacyScanner.scan(markdown);
         String safeMarkdown = privacy.passed() ? markdown : privacyScanner.redact(markdown);
-        String content = "HTML".equals(format) ? toHtml(safeMarkdown, safeRequest.safeTitle()) : safeMarkdown;
+        String safeTitle = privacyScanner.redact(safeRequest.safeTitle());
+        String content = "HTML".equals(format) ? toHtml(safeMarkdown, safeTitle) : safeMarkdown;
         Map<String, Object> metadata = metadata(claims, jdRun, privacy);
         PortfolioExportResponse response = new PortfolioExportResponse(
                 UUID.randomUUID(),
                 format,
-                safeRequest.safeTitle(),
+                safeTitle,
                 content,
                 metadata,
                 OffsetDateTime.now()

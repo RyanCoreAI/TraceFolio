@@ -6,9 +6,9 @@ TraceFolio is a traceable technical portfolio evidence RAG service. It ingests p
 
 This branch is a single-user local prototype. **Do not expose it to the public Internet, a shared LAN, a tunnel, or an unauthenticated reverse proxy.** The backend, Vite dev/preview servers, and Docker PostgreSQL port bind to `127.0.0.1` by default. Keep these bindings when running locally.
 
-The API has no authentication or user authorization. Blog ingest accepts caller-supplied URLs and follows redirects without a private-network/loopback destination policy. Local repository scanning can read directories accessible to the server process; `confirmOwnership=true` records caller confirmation and does not restrict filesystem access. Loopback binding reduces direct network exposure but does not resolve SSRF, malicious-page requests, or filesystem authorization. Import only trusted URLs and scan only directories you intend this process to read; use a restricted OS account without unrelated credentials or private mounts.
+The API has no authentication or user authorization. Blog and local-directory ingest are disabled until the operator configures their allowlists. Set `TRACEFOLIO_BLOG_ALLOWED_HOSTS` to comma-separated exact trusted HTTPS hosts and `TRACEFOLIO_LOCAL_REPO_ALLOWED_ROOTS` to comma-separated directories intended for scanning. `confirmOwnership=true` is still required and does not authorize a directory outside those roots. Local scans skip links outside the selected real root and bound directory traversal and UTF-8 reads.
 
-Public or multi-user deployment requires authenticated authorization, an explicit repository-root allowlist with real-path/symlink containment, destination/IP and redirect validation with network egress restrictions, and request-forgery protections. These controls are not implemented by the reliability fixes in this branch. See [reliability and verification notes](docs/reliability-fixes.md).
+Blog requests require HTTPS on port 443 and check the configured host and resolved public IP addresses at every redirect. Jsoup resolves the host again when connecting; these application checks do not pin DNS to the actual socket. Use only domains whose DNS you trust. Public or multi-user deployment still requires authentication, request-forgery protection and network egress restrictions, plus OS isolation against concurrent filesystem changes. Keep the service local. See [deep audit fixes](docs/deep-audit-20261104.md) and [reliability notes](docs/reliability-fixes.md).
 
 ## Stack
 
@@ -35,6 +35,8 @@ $env:JAVA_HOME='C:\Program Files\Java\jdk-21'
 $env:PATH="$env:JAVA_HOME\bin;$env:PATH"
 $env:DEEPSEEK_API_KEY='your_key'
 $env:GITHUB_TOKEN='optional_token'
+$env:TRACEFOLIO_BLOG_ALLOWED_HOSTS='spring.io'
+$env:TRACEFOLIO_LOCAL_REPO_ALLOWED_ROOTS='D:\TraceFolio'
 
 docker compose up -d
 mvn test

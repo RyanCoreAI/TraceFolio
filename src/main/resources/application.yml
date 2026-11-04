@@ -28,6 +28,10 @@ spring:
 
 tracefolio:
   tenant-id: ryan
+  blog:
+    allowed-hosts: ${TRACEFOLIO_BLOG_ALLOWED_HOSTS:}
+  local-repo:
+    allowed-roots: ${TRACEFOLIO_LOCAL_REPO_ALLOWED_ROOTS:}
   embedding:
     model: bge-m3
     dimensions: 1024

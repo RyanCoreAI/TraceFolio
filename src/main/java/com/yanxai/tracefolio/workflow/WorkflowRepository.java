@@ -10,7 +10,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 @Repository
 public class WorkflowRepository {
@@ -41,7 +45,9 @@ public class WorkflowRepository {
         return id;
     }
 
+    @Transactional
     public void addStep(UUID runId, int index, String name, String status, Object input, Object output, String error) {
+        requireOwnedRun(runId);
         jdbcTemplate.update("""
                 INSERT INTO rag_workflow_step (
                     id, run_id, step_index, step_name, status, input_json, output_json, error_message
@@ -61,26 +67,32 @@ public class WorkflowRepository {
                 UPDATE rag_workflow_run
                 SET current_step = ?,
                     updated_at = now()
-                WHERE id = ?
+                WHERE id = ? AND tenant_id = ?
                 """,
                 name,
-                runId
+                runId,
+                properties.tenantId()
         );
     }
 
+    @Transactional
     public void complete(UUID runId, Object output) {
         finish(runId, "COMPLETED", "completed", output, null);
     }
 
+    @Transactional
     public void completeWithStatus(UUID runId, String status, Object output) {
         finish(runId, status, "completed", output, null);
     }
 
+    @Transactional
     public void fail(UUID runId, String currentStep, Object output, String error) {
         finish(runId, "FAILED", currentStep, output, error);
     }
 
+    @Transactional
     public WorkflowDecisionView recordDecision(UUID runId, WorkflowDecisionRequest request) {
+        requireOwnedRun(runId);
         UUID id = UUID.randomUUID();
         jdbcTemplate.update("""
                 INSERT INTO rag_workflow_decision (
@@ -101,7 +113,9 @@ public class WorkflowRepository {
                 .orElseThrow();
     }
 
+    @Transactional
     public WorkflowRunView resume(UUID runId, WorkflowResumeRequest request) {
+        requireOwnedRun(runId);
         WorkflowRunView current = find(runId);
         if (!List.of("WAITING_REVIEW", "FAILED_VALIDATION").contains(current.status())) {
             throw new org.springframework.web.server.ResponseStatusException(
@@ -118,14 +132,17 @@ public class WorkflowRepository {
                 SET status = 'RESUMED',
                     current_step = 'human_resume',
                     updated_at = now()
-                WHERE id = ?
+                WHERE id = ? AND tenant_id = ?
                 """,
-                runId
+                runId,
+                properties.tenantId()
         );
         return find(runId);
     }
 
+    @Transactional
     public WorkflowRunView retryStep(UUID runId, int stepIndex, WorkflowRetryRequest request) {
+        requireOwnedRun(runId);
         WorkflowStepView step = steps(runId).stream()
                 .filter(item -> item.stepIndex() == stepIndex)
                 .findFirst()
@@ -146,10 +163,11 @@ public class WorkflowRepository {
                 SET status = 'RESUMED',
                     current_step = ?,
                     updated_at = now()
-                WHERE id = ?
+                WHERE id = ? AND tenant_id = ?
                 """,
                 "retry_" + step.stepName(),
-                runId
+                runId,
+                properties.tenantId()
         );
         return find(runId);
     }
@@ -217,6 +235,7 @@ public class WorkflowRepository {
     }
 
     private void finish(UUID runId, String status, String currentStep, Object output, String error) {
+        requireOwnedRun(runId);
         jdbcTemplate.update("""
                 UPDATE rag_workflow_run
                 SET status = ?,
@@ -224,14 +243,30 @@ public class WorkflowRepository {
                     output_json = ?::jsonb,
                     error_message = ?,
                     updated_at = now()
-                WHERE id = ?
+                WHERE id = ? AND tenant_id = ?
                 """,
                 status,
                 currentStep,
                 toJson(output),
                 error,
-                runId
+                runId,
+                properties.tenantId()
         );
+    }
+
+    private void requireOwnedRun(UUID runId) {
+        try {
+            // Held until the mutating transaction commits; serializes append-index allocation.
+            UUID owned = jdbcTemplate.queryForObject(
+                    "SELECT id FROM rag_workflow_run WHERE tenant_id = ? AND id = ? FOR UPDATE",
+                    UUID.class, properties.tenantId(), runId);
+            if (owned != null) {
+                return;
+            }
+        } catch (EmptyResultDataAccessException ignored) {
+            // Hide whether this UUID exists under a different configured tenant.
+        }
+        throw new ResponseStatusException(HttpStatus.NOT_FOUND, "workflow 不存在。");
     }
 
     private WorkflowRunView mapRun(ResultSet rs, int rowNum) throws SQLException {

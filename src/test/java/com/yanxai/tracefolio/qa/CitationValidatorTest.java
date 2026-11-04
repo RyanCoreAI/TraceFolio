@@ -19,7 +19,7 @@ class CitationValidatorTest {
         GroundedAnswer answer = new GroundedAnswer(
                 "ANSWERED",
                 "RAG 是证据链系统。",
-                List.of(new Citation(chunkId, "BLOG", "title", "uri", "heading", "证据链系统")),
+                List.of(new Citation(chunkId, "BLOG", "title", "https://example.com", "heading", "证据链系统")),
                 List.of(),
                 null
         );

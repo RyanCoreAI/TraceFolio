@@ -52,6 +52,8 @@ public class PortfolioController {
         String extension = "HTML".equals(export.format()) ? "html" : "md";
         return ResponseEntity.ok()
                 .contentType(mediaType)
+                .header("X-Content-Type-Options", "nosniff")
+                .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; sandbox")
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
                         .filename("tracefolio-evidence-pack.%s".formatted(extension), StandardCharsets.UTF_8)
                         .build()
