@@ -27,6 +27,34 @@ class EvidenceClaimRepositoryTest {
             new TraceFolioProperties("tenant", null, null, null, null, null), jdbc, new ObjectMapper(), validator);
 
     @Test
+    void reviewLookupIsTenantScopedAndNotLimitedToTheClaimRankingWindow() {
+        UUID source = UUID.randomUUID();
+        when(jdbc.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(Object[].class)))
+                .thenReturn(List.of(source));
+        assertThat(repository.blockedSourceChunks(List.of(source))).containsExactly(source);
+        verify(jdbc).query(argThat(sql -> sql.contains("tenant_id = ?") && sql.contains("source_chunk_id IN (?)")
+                        && sql.contains("validation_status IS NULL") && sql.contains("validation_status <> 'VALID'")
+                        && !sql.contains("LIMIT")), any(org.springframework.jdbc.core.RowMapper.class), eq("tenant"), eq(source));
+    }
+
+    @Test
+    void emptyReviewLookupDoesNotIssueAnInvalidInQuery() {
+        assertThat(repository.blockedSourceChunks(List.of())).isEmpty();
+        verifyNoInteractions(jdbc);
+    }
+
+    @Test
+    void savedEvidenceLookupChecksChunkAndClaimIdsUnderTheSameTenant() {
+        UUID reference = UUID.randomUUID();
+        when(jdbc.queryForObject(anyString(), eq(Boolean.class), any(Object[].class))).thenReturn(true);
+        assertThat(repository.hasBlockedEvidenceReferences(List.of(reference))).isTrue();
+        verify(jdbc).queryForObject(argThat(sql -> sql.contains("tenant_id = ?")
+                        && sql.contains("id IN (?) OR source_chunk_id IN (?)")
+                        && sql.contains("validation_status <> 'VALID'")),
+                eq(Boolean.class), eq("tenant"), eq(reference), eq(reference));
+    }
+
+    @Test
     void recognizesExistingChunkClaimWithNullScanAndTechnologyWithoutDeletingHistory() {
         EvidenceClaimDraft claim = draft("CHUNK", UUID.randomUUID(), null);
         when(validator.validate(claim)).thenReturn(new EvidenceClaimValidation("VALID", "UNKNOWN", List.of(), List.of()));

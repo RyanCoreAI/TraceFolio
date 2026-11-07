@@ -5,6 +5,7 @@ import com.yanxai.tracefolio.claims.EvidenceClaimRepository;
 import com.yanxai.tracefolio.jd.EvidenceMatrixRow;
 import com.yanxai.tracefolio.jd.JdRunRepository;
 import com.yanxai.tracefolio.jd.JdRunView;
+import com.yanxai.tracefolio.jd.MatchedEvidence;
 import com.yanxai.tracefolio.resume.InterviewDefense;
 import com.yanxai.tracefolio.resume.ProjectExperience;
 import com.yanxai.tracefolio.resume.ResumeDraft;
@@ -12,8 +13,10 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.commonmark.parser.Parser;
@@ -65,6 +68,7 @@ public class PortfolioExportService {
                 .filter(this::exportableClaim)
                 .toList();
         JdRunView jdRun = safeRequest.jdRunId() == null ? null : jdRunRepository.find(safeRequest.jdRunId());
+        validateSavedEvidence(jdRun);
         String markdown = toMarkdown(safeRequest.safeTitle(), claims, jdRun);
         PrivacyScanResult privacy = privacyScanner.scan(markdown);
         String safeMarkdown = privacy.passed() ? markdown : privacyScanner.redact(markdown);
@@ -89,6 +93,31 @@ public class PortfolioExportService {
 
     public List<PortfolioExportResponse> list(Integer limit) {
         return exportRepository.list(limit == null || limit <= 0 ? 20 : limit);
+    }
+
+    private void validateSavedEvidence(JdRunView jdRun) {
+        if (jdRun == null) return;
+        Set<UUID> references = new LinkedHashSet<>();
+        for (EvidenceMatrixRow row : jdRun.evidenceMatrix()) {
+            addEvidenceReferences(references, row.evidenceOrEmpty());
+        }
+        ResumeDraft draft = jdRun.resumeDraft();
+        if (draft != null && draft.interviewDefense() != null) {
+            for (InterviewDefense card : draft.interviewDefense()) {
+                addEvidenceReferences(references, card.evidence());
+            }
+        }
+        if (!references.isEmpty() && claimRepository.hasBlockedEvidenceReferences(List.copyOf(references))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "保存的 JD 匹配或简历草稿包含未通过审核的证据，请重新匹配并生成草稿后再导出。");
+        }
+    }
+
+    private void addEvidenceReferences(Set<UUID> references, List<MatchedEvidence> evidence) {
+        if (evidence == null) return;
+        for (MatchedEvidence item : evidence) {
+            if (item.chunkId() != null) references.add(item.chunkId());
+        }
     }
 
     private String toMarkdown(String title, List<EvidenceClaim> claims, JdRunView jdRun) {
@@ -352,7 +381,7 @@ public class PortfolioExportService {
 
     private boolean exportableClaim(EvidenceClaim claim) {
         return claim != null
-                && !"INVALID".equals(claim.validationStatus())
+                && "VALID".equals(claim.validationStatus())
                 && !nullToBlank(claim.quote()).isBlank()
                 && !nullToBlank(claim.sourceUri()).isBlank();
     }

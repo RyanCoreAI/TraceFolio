@@ -7,8 +7,12 @@ import com.yanxai.tracefolio.retrieval.RetrievalService;
 import com.yanxai.tracefolio.retrieval.RetrievedChunk;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -58,13 +62,28 @@ public class JdEvidenceMatcher {
     }
 
     private List<MatchedEvidence> retrieveEvidence(JdRequirement requirement) {
-        List<MatchedEvidence> claimEvidence = matchClaims(requirement);
+        List<EvidenceClaim> claims;
+        try {
+            claims = claimRepository.list(null, null, null, null, 200);
+        } catch (Exception ignored) {
+            // If review state cannot be read, do not silently bypass it.
+            return List.of();
+        }
+        List<MatchedEvidence> claimEvidence = matchClaims(requirement, claims);
         if (!claimEvidence.isEmpty()) {
             return claimEvidence;
         }
+        Set<UUID> blockedChunks = claims.stream()
+                .filter(claim -> !"VALID".equals(claim.validationStatus()))
+                .map(EvidenceClaim::sourceChunkId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toCollection(HashSet::new));
         try {
             RetrievalResult result = retrievalService.retrieve(buildQuery(requirement));
+            blockedChunks.addAll(claimRepository.blockedSourceChunks(
+                    result.chunks().stream().map(RetrievedChunk::id).distinct().toList()));
             return result.chunks().stream()
+                    .filter(chunk -> !blockedChunks.contains(chunk.id()))
                     .map(chunk -> toEvidence(requirement, chunk))
                     .filter(match -> !match.matchedKeywords().isEmpty())
                     .sorted(Comparator.comparingDouble(MatchedEvidence::rrfScore).reversed())
@@ -75,10 +94,11 @@ public class JdEvidenceMatcher {
         }
     }
 
-    private List<MatchedEvidence> matchClaims(JdRequirement requirement) {
+    private List<MatchedEvidence> matchClaims(JdRequirement requirement, List<EvidenceClaim> claims) {
         try {
-            return claimRepository.list(null, null, null, null, 200).stream()
-                    .filter(claim -> !"INVALID".equals(claim.validationStatus()))
+            return claims.stream()
+                    .filter(claim -> "VALID".equals(claim.validationStatus()))
+                    .filter(claim -> !nullToBlank(claim.quote()).isBlank() && !nullToBlank(claim.sourceUri()).isBlank())
                     .map(claim -> toClaimEvidence(requirement, claim))
                     .filter(match -> !match.matchedKeywords().isEmpty())
                     .sorted(Comparator.comparingDouble(MatchedEvidence::rrfScore).reversed())

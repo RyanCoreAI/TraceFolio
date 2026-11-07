@@ -15,6 +15,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
+import java.util.HashSet;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Isolation;
@@ -142,6 +144,37 @@ public class EvidenceClaimRepository {
                 properties.tenantId()
         );
         return value == null ? 0 : value;
+    }
+
+    /** Review state for retrieved chunks must not depend on the top-200 claim list. */
+    public Set<UUID> blockedSourceChunks(List<UUID> chunkIds) {
+        if (chunkIds.isEmpty()) return Set.of();
+        List<Object> args = new ArrayList<>();
+        args.add(properties.tenantId());
+        args.addAll(chunkIds);
+        String placeholders = String.join(",", java.util.Collections.nCopies(chunkIds.size(), "?"));
+        return new HashSet<>(jdbcTemplate.query("""
+                SELECT DISTINCT source_chunk_id FROM rag_evidence_claim
+                WHERE tenant_id = ? AND source_chunk_id IN (%s)
+                  AND (validation_status IS NULL OR validation_status <> 'VALID')
+                """.formatted(placeholders), (rs, rowNum) -> rs.getObject("source_chunk_id", UUID.class), args.toArray()));
+    }
+
+    /** Saved JD evidence uses a chunk ID or, for a repository scan, a claim ID. */
+    public boolean hasBlockedEvidenceReferences(List<UUID> evidenceIds) {
+        if (evidenceIds.isEmpty()) return false;
+        List<Object> args = new ArrayList<>();
+        args.add(properties.tenantId());
+        args.addAll(evidenceIds);
+        args.addAll(evidenceIds);
+        String placeholders = String.join(",", java.util.Collections.nCopies(evidenceIds.size(), "?"));
+        return Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM rag_evidence_claim WHERE tenant_id = ?
+                      AND (id IN (%s) OR source_chunk_id IN (%s))
+                      AND (validation_status IS NULL OR validation_status <> 'VALID')
+                )
+                """.formatted(placeholders, placeholders), Boolean.class, args.toArray()));
     }
 
     public List<EvidenceClaim> list(
